@@ -1,11 +1,5 @@
 import java.util.*;
-
-/**
- * Book My Stay - Hotel Booking Management System
- * Use Case 10: Booking Cancellation
- *
- * Version: 10.0
- */
+import java.util.concurrent.*;
 
 // ------------------- Reservation Class -------------------
 class Reservation {
@@ -32,26 +26,27 @@ class Reservation {
     }
 }
 
-// ------------------- Room Inventory -------------------
+// ------------------- Thread-Safe Room Inventory -------------------
 class RoomInventory {
-    private Map<String, Integer> inventory;
+    private final Map<String, Integer> inventory = new HashMap<>();
 
     public RoomInventory() {
-        inventory = new HashMap<>();
         inventory.put("Single Room", 5);
         inventory.put("Double Room", 3);
         inventory.put("Suite Room", 2);
     }
 
-    public int getAvailability(String roomType) {
-        return inventory.getOrDefault(roomType, 0);
+    // Thread-safe method to check and decrement inventory
+    public synchronized boolean allocateRoom(String roomType) {
+        int available = inventory.getOrDefault(roomType, 0);
+        if (available > 0) {
+            inventory.put(roomType, available - 1);
+            return true;
+        }
+        return false;
     }
 
-    public void incrementAvailability(String roomType) {
-        inventory.put(roomType, inventory.getOrDefault(roomType, 0) + 1);
-    }
-
-    public void displayInventory() {
+    public synchronized void displayInventory() {
         System.out.println("\nCurrent Inventory:");
         for (String roomType : inventory.keySet()) {
             System.out.println(roomType + " Available: " + inventory.get(roomType));
@@ -59,92 +54,68 @@ class RoomInventory {
     }
 }
 
-// ------------------- Booking Manager -------------------
-class BookingManager {
-    private Map<String, Reservation> confirmedBookings = new HashMap<>();
-    private RoomInventory inventory;
+// ------------------- Booking Processor -------------------
+class BookingProcessor implements Runnable {
+    private final Reservation reservation;
+    private final RoomInventory inventory;
+    private final List<Reservation> confirmedBookings;
 
-    public BookingManager(RoomInventory inventory) {
+    public BookingProcessor(Reservation reservation, RoomInventory inventory, List<Reservation> confirmedBookings) {
+        this.reservation = reservation;
         this.inventory = inventory;
+        this.confirmedBookings = confirmedBookings;
     }
 
-    // Add a new booking
-    public void addBooking(Reservation res) {
-        confirmedBookings.put(res.getReservationId(), res);
-        System.out.println("Booking Confirmed: " + res);
-    }
-
-    // Cancel an existing booking
-    public void cancelBooking(String reservationId) {
-        Reservation res = confirmedBookings.remove(reservationId);
-        if (res != null) {
-            inventory.incrementAvailability(res.getRoomType());
-            System.out.println("Booking Cancelled: " + res);
+    @Override
+    public void run() {
+        boolean allocated = inventory.allocateRoom(reservation.getRoomType());
+        if (allocated) {
+            synchronized (confirmedBookings) {
+                confirmedBookings.add(reservation);
+            }
+            System.out.println("Booking Confirmed: " + reservation);
         } else {
-            System.out.println("Cancellation Failed: Reservation ID " + reservationId + " not found.");
-        }
-    }
-
-    // Display all confirmed bookings
-    public void displayBookings() {
-        if (confirmedBookings.isEmpty()) {
-            System.out.println("No confirmed bookings.");
-            return;
-        }
-        System.out.println("\nConfirmed Bookings:");
-        for (Reservation res : confirmedBookings.values()) {
-            System.out.println("- " + res);
+            System.out.println("Booking Failed (No availability): " + reservation);
         }
     }
 }
 
 // ------------------- Main Application -------------------
-public class UseCase10BookingCancellation {
+public class BookMyStayApp1 {
 
-    public static void main(String[] args) {
-        Scanner sc = new Scanner(System.in);
+    public static void main(String[] args) throws InterruptedException {
         RoomInventory inventory = new RoomInventory();
-        BookingManager bookingManager = new BookingManager(inventory);
+        List<Reservation> confirmedBookings = Collections.synchronizedList(new ArrayList<>());
 
-        // Sample bookings
-        bookingManager.addBooking(new Reservation("RES101", "Alice", "Single Room", 2));
-        bookingManager.addBooking(new Reservation("RES102", "Bob", "Double Room", 3));
+        // Simulated booking requests from multiple guests
+        Reservation[] requests = {
+                new Reservation("RES101", "Alice", "Single Room", 2),
+                new Reservation("RES102", "Bob", "Double Room", 3),
+                new Reservation("RES103", "Charlie", "Suite Room", 1),
+                new Reservation("RES104", "Diana", "Single Room", 1),
+                new Reservation("RES105", "Eve", "Double Room", 2),
+                new Reservation("RES106", "Frank", "Suite Room", 2),
+                new Reservation("RES107", "Grace", "Single Room", 3)
+        };
 
-        while (true) {
-            System.out.println("\n=== Booking Management ===");
-            System.out.println("1. View Confirmed Bookings");
-            System.out.println("2. Cancel Booking");
-            System.out.println("3. View Inventory");
-            System.out.println("4. Exit");
-            System.out.print("Enter choice: ");
+        // ExecutorService for concurrent processing
+        ExecutorService executor = Executors.newFixedThreadPool(4);
 
-            int choice = -1;
-            try {
-                choice = Integer.parseInt(sc.nextLine());
-            } catch (NumberFormatException e) {
-                System.out.println("Invalid input! Enter a number 1-4.");
-                continue;
-            }
+        for (Reservation req : requests) {
+            executor.submit(new BookingProcessor(req, inventory, confirmedBookings));
+        }
 
-            switch (choice) {
-                case 1:
-                    bookingManager.displayBookings();
-                    break;
-                case 2:
-                    System.out.print("Enter Reservation ID to cancel: ");
-                    String resId = sc.nextLine();
-                    bookingManager.cancelBooking(resId);
-                    break;
-                case 3:
-                    inventory.displayInventory();
-                    break;
-                case 4:
-                    System.out.println("Exiting system. Goodbye!");
-                    sc.close();
-                    return;
-                default:
-                    System.out.println("Invalid choice! Please select 1-4.");
+        executor.shutdown();
+        executor.awaitTermination(10, TimeUnit.SECONDS);
+
+        System.out.println("\n=== Final Confirmed Bookings ===");
+        synchronized (confirmedBookings) {
+            for (Reservation res : confirmedBookings) {
+                System.out.println(res);
             }
         }
+
+        inventory.displayInventory();
+        System.out.println("\nAll concurrent booking requests processed safely.");
     }
 }
